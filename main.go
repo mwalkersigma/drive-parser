@@ -43,13 +43,12 @@ type SurpriceResponse struct {
 	Cost  int    `json:"cost"`
 }
 
-func countDownTimer(duration int){
+func countDownTimer(duration int) {
 	for i := duration; i > 0; i-- {
 		// print on the same line
 		fmt.Printf("\rSleeping for %d seconds", i)
 		time.Sleep(time.Second)
 	}
-
 }
 
 func init() {
@@ -97,7 +96,7 @@ func ShouldBeSentToCost(sheetID string) (cost int) {
 		panic(err)
 	}
 	fmt.Println("Response: ", modules.PrettyPrint(resp))
-	if  len(resp.Values) < 1 {
+	if len(resp.Values) < 1 {
 		fmt.Println("No data found in row")
 		return 0
 	}
@@ -111,9 +110,9 @@ func ShouldBeSentToCost(sheetID string) (cost int) {
 	fmt.Println("Currency String: ", currencyStr)
 	currencyStr = strings.Split(currencyStr, "$")[1]
 	currencyStr = strings.Replace(currencyStr, ",", "", -1)
-	
+
 	fmt.Println("Currency String: ", currencyStr)
-	cost,err = strconv.Atoi(currencyStr)
+	cost, err = strconv.Atoi(currencyStr)
 	if err != nil {
 		fmt.Println("Error converting currency string to int")
 		fmt.Println(err)
@@ -135,8 +134,8 @@ func CreateCostSheet(sheetID string, parentFolderId string, cost int) (respId st
 		return "", err
 	}
 
-	resp,err := driveService.Files.Copy(retroCostingTemplateID, &drive.File{
-		Name: fmt.Sprintf("Cost Sheet - %s", time.Now().Format("2006-01-02")),
+	resp, err := driveService.Files.Copy(retroCostingTemplateID, &drive.File{
+		Name:    fmt.Sprintf("Cost Sheet - %s", time.Now().Format("2006-01-02")),
 		Parents: []string{parentFolderId},
 	}).Do()
 	if err != nil {
@@ -149,10 +148,10 @@ func CreateCostSheet(sheetID string, parentFolderId string, cost int) (respId st
 	fmt.Println("File ID: ", resp.Id)
 	copyDataRange := "A2:D"
 	copyDataRange = fmt.Sprintf("Offer Template!%s", copyDataRange)
-	
+
 	costData.Range = copyDataRange
 
-	update,err := sheetsService.Spreadsheets.Values.Update(resp.Id, copyDataRange, costData).ValueInputOption("RAW").Do()
+	update, err := sheetsService.Spreadsheets.Values.Update(resp.Id, copyDataRange, costData).ValueInputOption("RAW").Do()
 	if err != nil {
 		fmt.Println("Error updating sheet")
 		fmt.Println(err)
@@ -161,9 +160,9 @@ func CreateCostSheet(sheetID string, parentFolderId string, cost int) (respId st
 	fmt.Println("Update: ", update)
 	fmt.Println("Cost data updated successfully")
 
-	update,err = sheetsService.Spreadsheets.Values.Update(resp.Id, "Offer Template!S3", &sheets.ValueRange{
-		Values: [][]interface{}{{cost}},
-		Range: "Offer Template!S3",
+	update, err = sheetsService.Spreadsheets.Values.Update(resp.Id, "Offer Template!S3", &sheets.ValueRange{
+		Values:         [][]interface{}{{cost}},
+		Range:          "Offer Template!S3",
 		MajorDimension: "ROWS",
 	}).ValueInputOption("USER_ENTERED").Do()
 	if err != nil {
@@ -179,6 +178,7 @@ func CreateCostSheet(sheetID string, parentFolderId string, cost int) (respId st
 
 func main() {
 	fmt.Println("Starting main function")
+	defer fmt.Println(" ")
 	defer fmt.Println("Main function finished")
 	files, err := driveService.
 		Files.
@@ -250,7 +250,7 @@ func main() {
 			fmt.Println(err)
 			panic(err)
 		}
-		
+
 		var surpriceResponse SurpriceResponse
 		body, err := io.ReadAll(priceResp.Body)
 		if err != nil {
@@ -264,13 +264,13 @@ func main() {
 			continue
 		}
 
-		fmt.Println("Surprice Response",modules.PrettyPrint(surpriceResponse))
+		fmt.Println("Surprice Response", modules.PrettyPrint(surpriceResponse))
 
 		http.Post(surpriceURLUpdateCost, "application/json", strings.NewReader(fmt.Sprintf(`{"cost": %d, "sheetId": "%s"}`, cost, costSheetID)))
 
 		fmt.Println("-=-=-=-=-=-=-=-=-=-=-=-")
 		countDownTimer(timeout)
-		
+
 	}
 
 }
