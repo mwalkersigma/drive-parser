@@ -186,14 +186,14 @@ func main() {
 
 	wg.Wait()
 	fmt.Println("WaitGroup finished")
-	
+
 	close(results)
 	fmt.Println("Results channel closed")
 	fmt.Println("-=-=-=-=-=-=-=-=-=-=-=-")
-	
+
 	for result := range results {
 		fmt.Println("Result :", result)
-		
+
 		var costSheetID, sheetID string
 		var hasCostSheet bool
 		var cost int
@@ -204,9 +204,9 @@ func main() {
 			if strings.Contains(fileDetails.Name, "Cost Sheet") {
 				hasCostSheet = true
 				costSheetID = fileDetails.Id
-			}else if len(strings.Split(fileDetails.Name, "-")) == 3 {
+			} else if len(strings.Split(fileDetails.Name, "-")) == 3 {
 				sheetID = fileDetails.Id
-			}else {
+			} else {
 				fmt.Println("File not a cost sheet or a procurement sheet")
 				fmt.Println(fileDetails)
 				break
@@ -234,7 +234,7 @@ func main() {
 		fmt.Println("Cost Sheet ID: ", costSheetID)
 		fmt.Println("Parsing the sheet")
 		fmt.Println(surpriceURLGetCost)
-		
+
 		sheetUrl := fmt.Sprintf("https://docs.google.com/spreadsheets/d/%s/edit#gid=0", costSheetID)
 		fmt.Println("Sheet URL: ", sheetUrl)
 		priceResp, err := http.Post(surpriceURLGetCost, "application/json", strings.NewReader(fmt.Sprintf(`{"url": "%s"}`, sheetUrl)))
@@ -264,7 +264,7 @@ func main() {
 			fmt.Println("Update Cost Response: ", updateCostResp.StatusCode)
 			if updateCostResp.StatusCode != 200 {
 				fmt.Println("Sheet was not updated successfully Skipping")
-			}else{
+			} else {
 				fmt.Println("Sheet updated successfully")
 			}
 			fmt.Println("-=-=-=-=-=-=-=-=-=-=-=-")
