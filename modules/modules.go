@@ -29,8 +29,14 @@ func PrettyPrint(i interface{}) string {
 	return string(s)
 } 
 
+type FileDetails struct {
+	Name string
+	Id string
+}
+
+
 type WorkerResult struct {
-	FileIds []string
+	FileDetails []FileDetails
 	ParentFolderId string
 	FileIdsCount int
 }
@@ -48,12 +54,13 @@ func Worker(jobs <-chan string, results chan<- WorkerResult, wg *sync.WaitGroup)
 			fmt.Println("Error getting files from folder")
 			panic(err)
 		}
-		var fileIds []string
+		var fileIds []FileDetails
 		for _, file := range innerFiles.Files {
 			fmt.Println("File: ", file.Name, " ID: ", file.Id)
-			fileIds = append(fileIds, file.Id)
-			results <- WorkerResult{ FileIds:fileIds, FileIdsCount: len(innerFiles.Files), ParentFolderId: j }
+			fileDetails := FileDetails{ Name: file.Name, Id: file.Id }
+			fileIds = append(fileIds, fileDetails)
 		}
+		results <- WorkerResult{ FileDetails:fileIds, FileIdsCount: len(innerFiles.Files), ParentFolderId: j }
 	}
 	fmt.Println("Worker finished")
 }

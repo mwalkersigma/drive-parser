@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -13,6 +11,7 @@ import (
 	"os"
 
 	"github.com/joho/godotenv"
+	"github.com/mwalkersigma/drive-parser/models"
 	"github.com/mwalkersigma/drive-parser/modules"
 	drive "google.golang.org/api/drive/v3"
 	"google.golang.org/api/option"
@@ -28,25 +27,10 @@ var surpriceURLGetCost, surpriceURLUpdateCost string
 var driveService *drive.Service
 var sheetsService *sheets.Service
 
-type SurpriceResponse struct {
-	Data []struct {
-		Manufacturer string `json:"manufacturer"`
-		Model        string `json:"model"`
-		Sku          any    `json:"Sku"`
-		Cost         any    `json:"Cost"`
-		Quantity     any    `json:"Quantity"`
-		Price        int    `json:"Price"`
-		Condition    any    `json:"Condition"`
-		TotalCost    int    `json:"totalCost"`
-	} `json:"data"`
-	Title string `json:"title"`
-	Cost  int    `json:"cost"`
-}
-
 func countDownTimer(duration int) {
 	for i := duration; i > 0; i-- {
 		// print on the same line
-		fmt.Printf("\rSleeping for %d seconds", i)
+		fmt.Printf("\rSleeping for %d seconds ", i)
 		time.Sleep(time.Second)
 	}
 }
@@ -107,11 +91,9 @@ func ShouldBeSentToCost(sheetID string) (cost int) {
 	fmt.Println("Data: ", resp.Values[0][0])
 
 	currencyStr := resp.Values[0][0].(string)
-	fmt.Println("Currency String: ", currencyStr)
 	currencyStr = strings.Split(currencyStr, "$")[1]
 	currencyStr = strings.Replace(currencyStr, ",", "", -1)
 
-	fmt.Println("Currency String: ", currencyStr)
 	cost, err = strconv.Atoi(currencyStr)
 	if err != nil {
 		fmt.Println("Error converting currency string to int")
@@ -178,17 +160,14 @@ func CreateCostSheet(sheetID string, parentFolderId string, cost int) (respId st
 
 func main() {
 	fmt.Println("Starting main function")
-	defer fmt.Println(" ")
-	defer fmt.Println("Main function finished")
-	files, err := driveService.
-		Files.
-		List().
-		Q(fmt.Sprintf("'%s' in parents and mimeType = 'application/vnd.google-apps.folder'", procurementFolderID)).
-		Do()
+
+	files, err := driveService.Files.List().
+		Q(fmt.Sprintf("'%s' in parents and mimeType = 'application/vnd.google-apps.folder'", procurementFolderID)).Do()
 	if err != nil {
 		fmt.Println("Error getting files from folder")
 		panic(err)
 	}
+
 	jobs, results, wg := modules.SetupWorkers(10)
 	fmt.Println("Jobs, Results and WaitGroup created successfully")
 
@@ -204,44 +183,58 @@ func main() {
 
 	close(jobs)
 	fmt.Println("Jobs channel closed")
+
 	wg.Wait()
 	fmt.Println("WaitGroup finished")
+	
 	close(results)
 	fmt.Println("Results channel closed")
 	fmt.Println("-=-=-=-=-=-=-=-=-=-=-=-")
-
+	
 	for result := range results {
 		fmt.Println("Result :", result)
+		
+		var costSheetID, sheetID string
+		var hasCostSheet bool
+		var cost int
 
-		if result.FileIdsCount != 1 {
-			fmt.Println("File count is not 1, sleeping...")
-			fmt.Println("-=-=-=-=-=-=-=-=-=-=-=-")
-			countDownTimer(timeout)
-			continue
+		for _, fileDetails := range result.FileDetails {
+			fmt.Println("File: ", fileDetails.Name, " ID: ", fileDetails.Id)
+			// if the name includes "Cost Sheet" then we have a cost sheet
+			if strings.Contains(fileDetails.Name, "Cost Sheet") {
+				hasCostSheet = true
+				costSheetID = fileDetails.Id
+			}else if len(strings.Split(fileDetails.Name, "-")) == 3 {
+				sheetID = fileDetails.Id
+			}else {
+				fmt.Println("File not a cost sheet or a procurement sheet")
+				fmt.Println(fileDetails)
+				break
+			}
 		}
 
-		sheetID := result.FileIds[0]
-		cost := ShouldBeSentToCost(sheetID)
+		cost = ShouldBeSentToCost(sheetID)
 		if cost == 0 {
 			fmt.Println("Cost is 0, sleeping...")
 			fmt.Println("-=-=-=-=-=-=-=-=-=-=-=-")
 			countDownTimer(timeout)
 			continue
 		}
-
 		fmt.Println("Cost: ", cost)
 
-		costSheetID, err := CreateCostSheet(sheetID, result.ParentFolderId, cost)
-		if err != nil {
-			fmt.Println("Error creating cost sheet")
-			fmt.Println(err)
-			panic(err)
+		if !hasCostSheet {
+			costSheetID, err = CreateCostSheet(sheetID, result.ParentFolderId, cost)
+			if err != nil {
+				fmt.Println("Error creating cost sheet")
+				fmt.Println(err)
+				panic(err)
+			}
 		}
 
 		fmt.Println("Cost Sheet ID: ", costSheetID)
 		fmt.Println("Parsing the sheet")
 		fmt.Println(surpriceURLGetCost)
-
+		
 		sheetUrl := fmt.Sprintf("https://docs.google.com/spreadsheets/d/%s/edit#gid=0", costSheetID)
 		fmt.Println("Sheet URL: ", sheetUrl)
 		priceResp, err := http.Post(surpriceURLGetCost, "application/json", strings.NewReader(fmt.Sprintf(`{"url": "%s"}`, sheetUrl)))
@@ -251,25 +244,35 @@ func main() {
 			panic(err)
 		}
 
-		var surpriceResponse SurpriceResponse
-		body, err := io.ReadAll(priceResp.Body)
+		var surpriceResponse models.SurpriceResponse
+		err = surpriceResponse.JSON(priceResp)
 		if err != nil {
 			fmt.Println("Error reading response body")
-			panic(err)
-		}
-
-		if err := json.Unmarshal(body, &surpriceResponse); err != nil {
-			fmt.Println("Error unmarshalling response body")
 			countDownTimer(timeout)
 			continue
 		}
 
-		fmt.Println("Surprice Response", modules.PrettyPrint(surpriceResponse))
+		if !surpriceResponse.IsSubmitted {
+			fmt.Println("Sheet not submitted")
+			fmt.Println("Surprice Response", modules.PrettyPrint(surpriceResponse))
 
-		http.Post(surpriceURLUpdateCost, "application/json", strings.NewReader(fmt.Sprintf(`{"cost": %d, "sheetId": "%s"}`, cost, costSheetID)))
-
-		fmt.Println("-=-=-=-=-=-=-=-=-=-=-=-")
-		countDownTimer(timeout)
+			updateCostResp, err := http.Post(surpriceURLUpdateCost, "application/json", strings.NewReader(fmt.Sprintf(`{"cost": %d, "url": "%s"}`, cost, sheetUrl)))
+			if err != nil {
+				fmt.Println("Error updating cost on Surprice")
+			}
+			// get the status code
+			fmt.Println("Update Cost Response: ", updateCostResp.StatusCode)
+			if updateCostResp.StatusCode != 200 {
+				fmt.Println("Sheet was not updated successfully Skipping")
+			}else{
+				fmt.Println("Sheet updated successfully")
+			}
+			fmt.Println("-=-=-=-=-=-=-=-=-=-=-=-")
+			countDownTimer(timeout)
+		} else {
+			fmt.Println("Sheet already submitted")
+			countDownTimer(timeout)
+		}
 
 	}
 
