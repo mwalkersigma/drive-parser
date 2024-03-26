@@ -21,7 +21,7 @@ import (
 var retroCostingTemplateID = `1ZLO39C95sDUWPsKfGORIGuw8Ep-oJ5VJ2HCce0i2NM4`
 var procurementFolderID = `1TeXMYU9jzWZyna7zB8jngeirvhJosvdO`
 
-var timeout = 5
+var timeout = 3
 
 var surpriceURLGetCost, surpriceURLUpdateCost string
 var driveService *drive.Service
@@ -77,7 +77,6 @@ func ShouldBeSentToCost(sheetID string) (cost int) {
 		fmt.Println("Error getting sheet")
 		fmt.Println("Sheet ID: ", sheetID)
 		fmt.Println(err)
-		panic(err)
 	}
 	fmt.Println("Response: ", modules.PrettyPrint(resp))
 	if len(resp.Values) < 1 {
