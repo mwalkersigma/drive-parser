@@ -21,7 +21,7 @@ import (
 var retroCostingTemplateID = `1ZLO39C95sDUWPsKfGORIGuw8Ep-oJ5VJ2HCce0i2NM4`
 var procurementFolderID = `1TeXMYU9jzWZyna7zB8jngeirvhJosvdO`
 
-var timeout = 3
+var timeout = 1
 
 var surpriceURLGetCost, surpriceURLUpdateCost string
 var driveService *drive.Service
@@ -68,7 +68,7 @@ func init() {
 	sheetsService = ss
 }
 
-func ShouldBeSentToCost(sheetID string) (cost int) {
+func ShouldBeSentToCost(sheetID string) (cost int, err error) {
 	var sheetAcceptedOffer string = "T3"
 	sheetRange := fmt.Sprintf("Final Offer!%s", sheetAcceptedOffer)
 	fmt.Println("Sheet Range: ", sheetRange)
@@ -77,15 +77,16 @@ func ShouldBeSentToCost(sheetID string) (cost int) {
 		fmt.Println("Error getting sheet")
 		fmt.Println("Sheet ID: ", sheetID)
 		fmt.Println(err)
+		return 0, err
 	}
 	fmt.Println("Response: ", modules.PrettyPrint(resp))
 	if len(resp.Values) < 1 {
 		fmt.Println("No data found in row")
-		return 0
+		return 0, nil
 	}
 	if len(resp.Values[0]) < 1 {
 		fmt.Println("No data found in cell")
-		return 0
+		return 0, nil
 	}
 	fmt.Println("Data: ", resp.Values[0][0])
 
@@ -100,12 +101,22 @@ func ShouldBeSentToCost(sheetID string) (cost int) {
 		panic(err)
 	}
 
-	return cost
+	return cost, nil
 }
 
 func CreateCostSheet(sheetID string, parentFolderId string, cost int) (respId string, err error) {
 	costDataRange := "A2:D"
 	costDataRange = fmt.Sprintf("Final Offer!%s", costDataRange)
+
+	// Get the title from the sheet
+	sheetToCopy, err := sheetsService.Spreadsheets.Get(sheetID).Do()
+	if err != nil {
+		fmt.Println("Error getting sheet")
+		fmt.Println("Sheet ID: ", sheetID)
+		fmt.Println(err)
+		return "", err
+	}
+	title := sheetToCopy.Properties.Title
 
 	costData, err := sheetsService.Spreadsheets.Values.Get(sheetID, costDataRange).Do()
 	if err != nil {
@@ -116,7 +127,7 @@ func CreateCostSheet(sheetID string, parentFolderId string, cost int) (respId st
 	}
 
 	resp, err := driveService.Files.Copy(retroCostingTemplateID, &drive.File{
-		Name:    fmt.Sprintf("Cost Sheet - %s", time.Now().Format("2006-01-02")),
+		Name:    fmt.Sprintf("%s - Cost Sheet - %s", title, time.Now().Format("2006-01-02")),
 		Parents: []string{parentFolderId},
 	}).Do()
 	if err != nil {
@@ -159,18 +170,37 @@ func CreateCostSheet(sheetID string, parentFolderId string, cost int) (respId st
 
 func main() {
 	fmt.Println("Starting main function")
+	var fileList []*drive.File
 
 	files, err := driveService.Files.List().
+		Fields("files(id, name), nextPageToken").
 		Q(fmt.Sprintf("'%s' in parents and mimeType = 'application/vnd.google-apps.folder'", procurementFolderID)).Do()
 	if err != nil {
 		fmt.Println("Error getting files from folder")
 		panic(err)
 	}
+	fileList = append(fileList, files.Files...)
+	if files.NextPageToken != "" {
+		for files.NextPageToken != "" {
+			fmt.Println("Next page token found")
+			files, err = driveService.Files.List().
+				Fields("files(id, name), nextPageToken").
+				Q(fmt.Sprintf("'%s' in parents and mimeType = 'application/vnd.google-apps.folder'", procurementFolderID)).
+				PageToken(files.NextPageToken).Do()
+			if err != nil {
+				fmt.Println("Error getting files from folder")
+				panic(err)
+			}
+			fileList = append(fileList, files.Files...)
+		}
+	}
 
-	jobs, results, wg := modules.SetupWorkers(10)
+	fmt.Println("Files Length: ", len(fileList))
+
+	jobs, results, wg := modules.SetupWorkers(10, len(fileList))
 	fmt.Println("Jobs, Results and WaitGroup created successfully")
 
-	for _, file := range files.Files {
+	for _, file := range fileList {
 		slices := strings.Split(file.Name, "-")
 		if len(slices) > 2 {
 			fmt.Println("File Name: ", file.Name)
@@ -212,7 +242,13 @@ func main() {
 			}
 		}
 
-		cost = ShouldBeSentToCost(sheetID)
+		cost, err = ShouldBeSentToCost(sheetID)
+		if err != nil {
+			fmt.Println("Error getting cost")
+			fmt.Println(err)
+			fmt.Println("-=-=-=-=-=-=-=-=-=-=-=-")
+			continue
+		}
 		if cost == 0 {
 			fmt.Println("Cost is 0, sleeping...")
 			fmt.Println("-=-=-=-=-=-=-=-=-=-=-=-")
@@ -224,9 +260,10 @@ func main() {
 		if !hasCostSheet {
 			costSheetID, err = CreateCostSheet(sheetID, result.ParentFolderId, cost)
 			if err != nil {
+				fmt.Println("This is the error")
 				fmt.Println("Error creating cost sheet")
 				fmt.Println(err)
-				panic(err)
+				continue
 			}
 		}
 
