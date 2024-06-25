@@ -23,9 +23,13 @@ var procurementFolderID = `1TeXMYU9jzWZyna7zB8jngeirvhJosvdO`
 
 var timeout = 1
 
+// ParsedDrivesJson is the struct for the parsed json file
+// it is an array of strings
+
 var surpriceURLGetCost, surpriceURLUpdateCost string
 var driveService *drive.Service
 var sheetsService *sheets.Service
+var p models.ParsedDrivesJson
 
 func countDownTimer(duration int) {
 	for i := duration; i > 0; i-- {
@@ -36,7 +40,8 @@ func countDownTimer(duration int) {
 }
 
 func init() {
-
+	p.GetDrives()
+	fmt.Println(p.Drives)
 	fmt.Println(" Starting Costing Sheet Generator And Parser... ")
 
 	err := godotenv.Load()
@@ -171,6 +176,7 @@ func CreateCostSheet(sheetID string, parentFolderId string, cost int) (respId st
 func main() {
 	fmt.Println("Starting main function")
 	var fileList []*drive.File
+	defer p.SaveDrives()
 
 	files, err := driveService.Files.List().
 		Fields("files(id, name), nextPageToken").
@@ -196,7 +202,17 @@ func main() {
 	}
 
 	fmt.Println("Files Length: ", len(fileList))
-
+	// remove any files from the file list in p.Drives
+	for _, drive := range p.Drives {
+		// drive = strings.Split(drive, "-")[0]
+		for i, file := range fileList {
+			if file.Name == drive {
+				fmt.Println("Removing file: ", file.Name)
+				fileList = append(fileList[:i], fileList[i+1:]...)
+			}
+		}
+	}
+	fmt.Println("Files Length: ", len(fileList))
 	jobs, results, wg := modules.SetupWorkers(10, len(fileList))
 	fmt.Println("Jobs, Results and WaitGroup created successfully")
 
@@ -302,11 +318,17 @@ func main() {
 				fmt.Println("Sheet was not updated successfully Skipping")
 			} else {
 				fmt.Println("Sheet updated successfully")
+				for _, fileDetails := range result.FileDetails {
+					p.AddDrive(fileDetails.Name)
+				}
 			}
 			fmt.Println("-=-=-=-=-=-=-=-=-=-=-=-")
 			countDownTimer(timeout)
 		} else {
 			fmt.Println("Sheet already submitted")
+			for _, fileDetails := range result.FileDetails {
+				p.AddDrive(fileDetails.Name)
+			}
 			countDownTimer(timeout)
 		}
 
