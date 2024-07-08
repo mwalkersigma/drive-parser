@@ -2,20 +2,18 @@ package main
 
 import (
 	"context"
-	"net/http"
-	"strconv"
-	"strings"
-	"time"
-
 	"fmt"
-	"os"
-
 	"github.com/joho/godotenv"
 	"github.com/mwalkersigma/drive-parser/models"
 	"github.com/mwalkersigma/drive-parser/modules"
 	drive "google.golang.org/api/drive/v3"
 	"google.golang.org/api/option"
 	"google.golang.org/api/sheets/v4"
+	"net/http"
+	"os"
+	"strconv"
+	"strings"
+	"time"
 )
 
 var retroCostingTemplateID = `1ZLO39C95sDUWPsKfGORIGuw8Ep-oJ5VJ2HCce0i2NM4`
@@ -30,6 +28,7 @@ var surpriceURLGetCost, surpriceURLUpdateCost string
 var driveService *drive.Service
 var sheetsService *sheets.Service
 var p models.ParsedDrivesJson
+var status models.Status
 
 func countDownTimer(duration int) {
 	for i := duration; i > 0; i-- {
@@ -41,6 +40,7 @@ func countDownTimer(duration int) {
 
 func init() {
 	p.GetDrives()
+	status.GetStatus()
 	fmt.Println(p.Drives)
 	fmt.Println(" Starting Costing Sheet Generator And Parser... ")
 
@@ -109,7 +109,7 @@ func ShouldBeSentToCost(sheetID string) (cost int, err error) {
 	return cost, nil
 }
 
-func CreateCostSheet(sheetID string, parentFolderId string, cost int) (respId string, err error) {
+func CreateCostSheet(sheetID string, parentFolderId string, cost int) (respId string, costSheetName string, err error) {
 	costDataRange := "A2:D"
 	costDataRange = fmt.Sprintf("Final Offer!%s", costDataRange)
 
@@ -119,7 +119,7 @@ func CreateCostSheet(sheetID string, parentFolderId string, cost int) (respId st
 		fmt.Println("Error getting sheet")
 		fmt.Println("Sheet ID: ", sheetID)
 		fmt.Println(err)
-		return "", err
+		return "", "", err
 	}
 	title := sheetToCopy.Properties.Title
 
@@ -128,17 +128,17 @@ func CreateCostSheet(sheetID string, parentFolderId string, cost int) (respId st
 		fmt.Println("Error getting sheet")
 		fmt.Println("Sheet ID: ", sheetID)
 		fmt.Println(err)
-		return "", err
+		return "", "", err
 	}
-
+	costSheetName = fmt.Sprintf("%s - Cost Sheet - %s", title, time.Now().Format("2006-01-02"))
 	resp, err := driveService.Files.Copy(retroCostingTemplateID, &drive.File{
-		Name:    fmt.Sprintf("%s - Cost Sheet - %s", title, time.Now().Format("2006-01-02")),
+		Name:    costSheetName,
 		Parents: []string{parentFolderId},
 	}).Do()
 	if err != nil {
 		fmt.Println("Error copying file")
 		fmt.Println(err)
-		return "", err
+		return "", "", err
 	}
 
 	fmt.Println("File copied successfully")
@@ -152,7 +152,7 @@ func CreateCostSheet(sheetID string, parentFolderId string, cost int) (respId st
 	if err != nil {
 		fmt.Println("Error updating sheet")
 		fmt.Println(err)
-		return "", err
+		return "", "", err
 	}
 	fmt.Println("Update: ", update)
 	fmt.Println("Cost data updated successfully")
@@ -165,15 +165,26 @@ func CreateCostSheet(sheetID string, parentFolderId string, cost int) (respId st
 	if err != nil {
 		fmt.Println("Error updating cost on sheet")
 		fmt.Println(err)
-		return "", err
+		return "", "", err
 	}
 	fmt.Println("Update: ", update)
 	fmt.Println("Cost updated successfully")
 
-	return resp.Id, nil
+	return resp.Id, costSheetName, nil
 }
 
 func main() {
+	if status.Running {
+		fmt.Println("Already running")
+		return
+	}
+	status.Running = true
+	status.Save()
+	defer func() {
+		status.Running = false
+		status.Save()
+	}()
+
 	fmt.Println("Starting main function")
 	var fileList []*drive.File
 	defer p.SaveDrives()
@@ -241,6 +252,7 @@ func main() {
 
 		var costSheetID, sheetID string
 		var hasCostSheet bool
+		var costSheetName string
 		var cost int
 
 		for _, fileDetails := range result.FileDetails {
@@ -249,6 +261,7 @@ func main() {
 			if strings.Contains(fileDetails.Name, "Cost Sheet") {
 				hasCostSheet = true
 				costSheetID = fileDetails.Id
+				costSheetName = fileDetails.Name
 			} else if len(strings.Split(fileDetails.Name, "-")) == 3 {
 				sheetID = fileDetails.Id
 			} else {
@@ -274,7 +287,7 @@ func main() {
 		fmt.Println("Cost: ", cost)
 
 		if !hasCostSheet {
-			costSheetID, err = CreateCostSheet(sheetID, result.ParentFolderId, cost)
+			costSheetID, costSheetName, err = CreateCostSheet(sheetID, result.ParentFolderId, cost)
 			if err != nil {
 				fmt.Println("This is the error")
 				fmt.Println("Error creating cost sheet")
@@ -310,25 +323,23 @@ func main() {
 
 			updateCostResp, err := http.Post(surpriceURLUpdateCost, "application/json", strings.NewReader(fmt.Sprintf(`{"cost": %d, "url": "%s"}`, cost, sheetUrl)))
 			if err != nil {
+				p.AddCostSheetNotSubmitted(costSheetName)
 				fmt.Println("Error updating cost on Surprice")
 			}
 			// get the status code
 			fmt.Println("Update Cost Response: ", updateCostResp.StatusCode)
 			if updateCostResp.StatusCode != 200 {
+				p.AddCostSheetNotSubmitted(costSheetName)
 				fmt.Println("Sheet was not updated successfully Skipping")
 			} else {
 				fmt.Println("Sheet updated successfully")
-				for _, fileDetails := range result.FileDetails {
-					p.AddDrive(fileDetails.Name)
-				}
+				p.AddDrive(costSheetName)
 			}
 			fmt.Println("-=-=-=-=-=-=-=-=-=-=-=-")
 			countDownTimer(timeout)
 		} else {
 			fmt.Println("Sheet already submitted")
-			for _, fileDetails := range result.FileDetails {
-				p.AddDrive(fileDetails.Name)
-			}
+			p.AddDrive(costSheetName)
 			countDownTimer(timeout)
 		}
 

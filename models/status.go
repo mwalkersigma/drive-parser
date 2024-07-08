@@ -6,22 +6,21 @@ import (
 	"os"
 )
 
-type ParsedDrivesJson struct {
-	Drives                 []string `json:"drives"`
-	CostSheetsNotSubmitted []string `json:"costSheetsNotSubmitted"`
+type Status struct {
+	Running bool `json:"running"`
 }
 
-func (p *ParsedDrivesJson) GetDrives() {
+func (p *Status) GetStatus() {
 	// check if json folder exists
 	exists := os.IsExist(os.Mkdir("./json", 0755))
 	if exists {
 		fmt.Println("Json folder exists")
 	}
 	// check if parsedFiles.json exists
-	_, err := os.Stat("./json/parsedFiles.json")
+	_, err := os.Stat("./json/status.json")
 	if err != nil {
 		// create the file { "drives": [] }
-		file, err := os.Create("./json/parsedFiles.json")
+		file, err := os.Create("./json/status.json")
 		if err != nil {
 			fmt.Println("Error creating file")
 			panic(err)
@@ -33,7 +32,7 @@ func (p *ParsedDrivesJson) GetDrives() {
 				panic(err)
 			}
 		}(file)
-		emptyData := ParsedDrivesJson{Drives: []string{}, CostSheetsNotSubmitted: []string{}}
+		emptyData := Status{Running: true}
 		jsonParser := json.NewEncoder(file)
 		err = jsonParser.Encode(emptyData)
 		if err != nil {
@@ -42,7 +41,7 @@ func (p *ParsedDrivesJson) GetDrives() {
 		}
 	}
 
-	file, err := os.Open("./json/parsedFiles.json")
+	file, err := os.Open("./json/status.json")
 	if err != nil {
 		fmt.Println("Error opening file")
 		panic(err)
@@ -62,36 +61,8 @@ func (p *ParsedDrivesJson) GetDrives() {
 		panic(err)
 	}
 }
-func (p *ParsedDrivesJson) HasDrive(drive string) bool {
-	for _, d := range p.Drives {
-		if d == drive {
-			return true
-		}
-	}
-	return false
-}
-func (p *ParsedDrivesJson) AddDrive(drive string) {
-	p.Drives = append(p.Drives, drive)
-}
-func (p *ParsedDrivesJson) RemoveDrive(drive string) {
-	for i, d := range p.Drives {
-		if d == drive {
-			p.Drives = append(p.Drives[:i], p.Drives[i+1:]...)
-		}
-	}
-}
-func (p *ParsedDrivesJson) AddCostSheetNotSubmitted(drive string) {
-	p.CostSheetsNotSubmitted = append(p.CostSheetsNotSubmitted, drive)
-}
-func (p *ParsedDrivesJson) RemoveCostSheetNotSubmitted(drive string) {
-	for i, d := range p.CostSheetsNotSubmitted {
-		if d == drive {
-			p.CostSheetsNotSubmitted = append(p.CostSheetsNotSubmitted[:i], p.CostSheetsNotSubmitted[i+1:]...)
-		}
-	}
-}
-func (p *ParsedDrivesJson) SaveDrives() {
-	file, err := os.Create("./json/parsedFiles.json")
+func (p *Status) Save() {
+	file, err := os.Create("./json/status.json")
 	if err != nil {
 		fmt.Println("Error creating file")
 		panic(err)
