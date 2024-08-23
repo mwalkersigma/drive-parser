@@ -92,7 +92,7 @@ OUTER:
 		costSentToSVFloat, err := strconv.ParseFloat(costSentToSV, 64)
 		// convert to int
 		costSentToSVFloat = costSentToSVFloat * 100
-		costSentToSVInt := int(math.Round(costSentToSVFloat))
+		costSentToSVInt := int(math.Round(costSentToSVFloat)) / 100
 		if err != nil {
 			fmt.Println("Error converting cost sent to sv to int")
 			continue

@@ -1,26 +1,29 @@
 package models
 
 import (
-	"net/http"
-	"io"
-	"fmt"
 	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
 )
-type SurpriceResponse struct {
-	Data []struct {
-		Manufacturer string  `json:"manufacturer"`
-		Model        string  `json:"model"`
-		Sku          any     `json:"Sku"`
-		Cost         float64 `json:"Cost"`
-		Quantity     string  `json:"Quantity"`
-		Price        json.Number  `json:"Price"`
-		Condition    string  `json:"Condition"`
-		TotalCost    int     `json:"totalCost"`
-	} `json:"data"`
-	IsSubmitted bool   `json:"isSubmitted"`
-	Title       string `json:"title"`
-	Cost        int    `json:"cost"`
+
+type Component struct {
+	Manufacturer any     `json:"manufacturer"`
+	Model        any     `json:"model"`
+	Sku          any     `json:"Sku"`
+	Cost         float64 `json:"Cost"`
+	Quantity     any     `json:"Quantity"`
+	Price        any     `json:"Price"`
 }
+
+type SurpriceResponse struct {
+	Data        []Component `json:"data"`
+	IsSubmitted bool        `json:"isSubmitted"`
+	Title       string      `json:"title"`
+	Cost        int         `json:"cost"`
+	Error       bool        `json:"error"`
+}
+
 func (this *SurpriceResponse) JSON(response *http.Response) error {
 	var ResponseJson SurpriceResponse
 	body, err := io.ReadAll(response.Body)
@@ -30,6 +33,8 @@ func (this *SurpriceResponse) JSON(response *http.Response) error {
 	}
 	defer response.Body.Close()
 	if err := json.Unmarshal(body, &ResponseJson); err != nil {
+		// print out the body for debugging
+		fmt.Println(string(body))
 		fmt.Println("Error unmarshalling response body")
 		fmt.Println(err)
 		return err

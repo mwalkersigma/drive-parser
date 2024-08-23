@@ -11,8 +11,10 @@ import (
 	"google.golang.org/api/sheets/v4"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -73,6 +75,10 @@ func init() {
 	sheetsService = ss
 }
 
+// ShouldBeSentToCost
+// This function determines if a pricing sheet has a final offer amount.
+// if it does, it returns the amount as an integer
+// if it does not, it returns 0
 func ShouldBeSentToCost(sheetID string) (cost int, err error) {
 	var sheetAcceptedOffer string = "T3"
 	sheetRange := fmt.Sprintf("Final Offer!%s", sheetAcceptedOffer)
@@ -173,19 +179,59 @@ func CreateCostSheet(sheetID string, parentFolderId string, cost int) (respId st
 	return resp.Id, costSheetName, nil
 }
 
-func main() {
-	if status.Running {
-		fmt.Println("Already running")
-		return
-	}
+func handleInterrupt() {
+	c := make(chan os.Signal)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-c
+		status.Running = false
+		status.Save()
+		os.Exit(1)
+	}()
+}
+
+func handleRunning() {
 	status.Running = true
 	status.Save()
 	defer func() {
 		status.Running = false
 		status.Save()
 	}()
+}
 
+func decideSheet(result modules.WorkerResult) (sheetId string, hasCostSheet bool, sheetFound bool) {
+
+	for _, fileDetails := range result.FileDetails {
+		if strings.Contains(fileDetails.Name, "Cost Sheet") {
+			return fileDetails.Id, true, true
+		}
+		if len(strings.Split(fileDetails.Name, "-")) == 3 {
+			sheetId = fileDetails.Id
+			sheetFound = true
+			hasCostSheet = false
+		}
+	}
+
+	if sheetFound {
+		return sheetId, hasCostSheet, sheetFound
+	}
+
+	return "", false, false
+
+}
+
+func main() {
+	// if the program is running and interrupted with ctrl + c then set the status to not running
+	handleInterrupt()
+
+	// if the program is already running then return
+	if status.Running {
+		fmt.Println("Already running")
+		return
+	}
+	handleRunning()
 	fmt.Println("Starting main function")
+
 	var fileList []*drive.File
 	defer p.SaveDrives()
 
@@ -214,10 +260,10 @@ func main() {
 
 	fmt.Println("Files Length: ", len(fileList))
 	// remove any files from the file list in p.Drives
-	for _, drive := range p.Drives {
-		// drive = strings.Split(drive, "-")[0]
+	for _, storageDrive := range p.Drives {
+		// storageDrive = strings.Split(storageDrive, "-")[0]
 		for i, file := range fileList {
-			if file.Name == drive {
+			if file.Name == storageDrive {
 				fmt.Println("Removing file: ", file.Name)
 				fileList = append(fileList[:i], fileList[i+1:]...)
 			}
@@ -250,43 +296,32 @@ func main() {
 	for result := range results {
 		fmt.Println("Result :", result)
 
-		var costSheetID, sheetID string
-		var hasCostSheet bool
-		var costSheetName string
+		var costSheetName, costSheetID string
 		var cost int
-
-		for _, fileDetails := range result.FileDetails {
-			fmt.Println("File: ", fileDetails.Name, " ID: ", fileDetails.Id)
-			// if the name includes "Cost Sheet" then we have a cost sheet
-			if strings.Contains(fileDetails.Name, "Cost Sheet") {
-				hasCostSheet = true
-				costSheetID = fileDetails.Id
-				costSheetName = fileDetails.Name
-			} else if len(strings.Split(fileDetails.Name, "-")) == 3 {
-				sheetID = fileDetails.Id
-			} else {
-				fmt.Println("File not a cost sheet or a procurement sheet")
-				fmt.Println(fileDetails)
-				break
+		//todo make sure we are properly handling all cases
+		sheetID, hasCostSheet, sheetFound := decideSheet(result)
+		if !sheetFound {
+			fmt.Println("Sheet not found")
+			fmt.Println("-=-=-=-=-=-=-=-=-=-=-=-")
+			continue
+		}
+		if hasCostSheet {
+			costSheetID = sheetID
+		} else {
+			fmt.Println("Sheet found but no cost sheet")
+			cost, err = ShouldBeSentToCost(sheetID)
+			if err != nil {
+				fmt.Println("Error getting cost")
+				fmt.Println(err)
+				fmt.Println("-=-=-=-=-=-=-=-=-=-=-=-")
+				continue
 			}
-		}
-
-		cost, err = ShouldBeSentToCost(sheetID)
-		if err != nil {
-			fmt.Println("Error getting cost")
-			fmt.Println(err)
-			fmt.Println("-=-=-=-=-=-=-=-=-=-=-=-")
-			continue
-		}
-		if cost == 0 {
-			fmt.Println("Cost is 0, sleeping...")
-			fmt.Println("-=-=-=-=-=-=-=-=-=-=-=-")
-			countDownTimer(timeout)
-			continue
-		}
-		fmt.Println("Cost: ", cost)
-
-		if !hasCostSheet {
+			if cost == 0 {
+				fmt.Println("Cost is 0, sleeping...")
+				fmt.Println("-=-=-=-=-=-=-=-=-=-=-=-")
+				countDownTimer(timeout)
+				continue
+			}
 			costSheetID, costSheetName, err = CreateCostSheet(sheetID, result.ParentFolderId, cost)
 			if err != nil {
 				fmt.Println("This is the error")
@@ -313,10 +348,16 @@ func main() {
 		err = surpriceResponse.JSON(priceResp)
 		if err != nil {
 			fmt.Println("Error reading response body")
+			fmt.Println(err)
 			countDownTimer(timeout)
 			continue
 		}
-
+		if surpriceResponse.Error {
+			fmt.Println("Error getting cost from Surprice")
+			fmt.Println("Surprice Response", modules.PrettyPrint(surpriceResponse))
+			countDownTimer(timeout)
+			continue
+		}
 		if !surpriceResponse.IsSubmitted {
 			fmt.Println("Sheet not submitted")
 			fmt.Println("Surprice Response", modules.PrettyPrint(surpriceResponse))

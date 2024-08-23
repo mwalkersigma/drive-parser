@@ -39,7 +39,7 @@ func (r *SVRequestBody) ToJSON() string {
 }
 
 var procurementFolderID = `1TeXMYU9jzWZyna7zB8jngeirvhJosvdO`
-var timeout = 12
+var timeout = 1
 
 var driveService *drive.Service
 var sheetsService *sheets.Service
