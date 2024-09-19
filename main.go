@@ -193,10 +193,6 @@ func handleInterrupt() {
 func handleRunning() {
 	status.Running = true
 	status.Save()
-	defer func() {
-		status.Running = false
-		status.Save()
-	}()
 }
 
 func decideSheet(result modules.WorkerResult) (sheetId string, hasCostSheet bool, sheetFound bool) {
@@ -225,11 +221,17 @@ func main() {
 	handleInterrupt()
 
 	// if the program is already running then return
+	fmt.Println("Status: ", status.Running)
 	if status.Running {
 		fmt.Println("Already running")
 		return
 	}
 	handleRunning()
+	defer func() {
+		status.Running = false
+		status.Save()
+	}()
+
 	fmt.Println("Starting main function")
 
 	var fileList []*drive.File
