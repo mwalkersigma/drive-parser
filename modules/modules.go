@@ -153,12 +153,12 @@ func MarkSheet(reason string, resolution string) func(string, string) (bool, err
 }
 func MarkSheetSuspended(sheetID string, title string) (bool, error) {
 	reason := "Sheet has not had cost put in for 60 or more days and is suspended in Insightly"
-	resolution := "Please communicate with the Opportunity Owner to determine if the opportunity is still active. If the opportunity is still active, please update the sheet with the correct cost."
+	resolution := "Please communicate with the Opportunity Owner to determine if the opportunity is still active. If the opportunity is still active, please update the sheet with the correct cost. Then mark it as reviewed in (Surtrics)[http://surtrics.forsigma.com/admin/driveParser/review]"
 	return MarkSheet(reason, resolution)(sheetID, title)
 }
 func MarkSheetForgotten(sheetID string, title string) (bool, error) {
 	reason := "Sheet is currently in OPEN status and has not been updated in 60 or more days"
-	resolution := "Please communicate with the Opportunity Owner to determine if the opportunity is still active. If the opportunity is still active, please update the sheet with the correct cost."
+	resolution := "Please communicate with the Opportunity Owner to determine if the opportunity is still active. If the opportunity is still active, please update the sheet with the correct cost. Then mark it as reviewed in (Surtrics)[http://surtrics.forsigma.com/admin/driveParser/review]"
 	return MarkSheet(reason, resolution)(sheetID, title)
 }
 

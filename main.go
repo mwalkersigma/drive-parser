@@ -10,6 +10,7 @@ import (
 	drive "google.golang.org/api/drive/v3"
 	"google.golang.org/api/option"
 	"google.golang.org/api/sheets/v4"
+	_ "google.golang.org/api/sheets/v4"
 	"io"
 	"net/http"
 	"os"
