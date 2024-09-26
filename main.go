@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"github.com/joho/godotenv"
 	"github.com/mwalkersigma/drive-parser/models"
@@ -9,28 +10,26 @@ import (
 	drive "google.golang.org/api/drive/v3"
 	"google.golang.org/api/option"
 	"google.golang.org/api/sheets/v4"
+	"io"
 	"net/http"
 	"os"
-	"os/signal"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
+var ParentFolderID = `1nhi_QzxkU2maCP5rHG_C9MtTtlY3qDbL`
 var retroCostingTemplateID = `1ZLO39C95sDUWPsKfGORIGuw8Ep-oJ5VJ2HCce0i2NM4`
 var procurementFolderID = `1TeXMYU9jzWZyna7zB8jngeirvhJosvdO`
-
-var timeout = 1
-
-// ParsedDrivesJson is the struct for the parsed json file
-// it is an array of strings
-
-var surpriceURLGetCost, surpriceURLUpdateCost string
+var winsFolderId string
+var lossesFolderId string
 var driveService *drive.Service
 var sheetsService *sheets.Service
-var p models.ParsedDrivesJson
-var status models.Status
+
+var surpriceURLUpdateCost, winsFolderName string
+
+var timeout = 1
+var start time.Time
 
 func countDownTimer(duration int) {
 	for i := duration; i > 0; i-- {
@@ -40,64 +39,187 @@ func countDownTimer(duration int) {
 	}
 }
 
-func init() {
-	p.GetDrives()
-	status.GetStatus()
-	fmt.Println(p.Drives)
-	fmt.Println(" Starting Costing Sheet Generator And Parser... ")
+// 16OCblUaerCao9CtoRjl69HaOvcZhYdMwW3dmzzI_E3I
+func CallDriveParser(body string, target interface{}) error {
+	var client = &http.Client{Timeout: 60 * time.Second * 5}
+	resp, err := client.Post(surpriceURLUpdateCost, "application/json", strings.NewReader(body))
+	if err != nil {
+		fmt.Println("Error calling Drive Parser")
+		fmt.Println(err)
+		return err
+	}
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+			fmt.Println("Error closing response body")
+			fmt.Println(err)
+		}
+	}(resp.Body)
 
+	return json.NewDecoder(resp.Body).Decode(target)
+}
+
+func getFolderId(ds *drive.Service, folderName string) (string, error) {
+	fmt.Println(fmt.Sprintf("Getting %s folder", folderName))
+	var folders []*drive.File
+	files, err := ds.Files.List().Q(fmt.Sprintf("'%s' in parents and mimeType = 'application/vnd.google-apps.folder'", ParentFolderID)).Do()
+	if err != nil {
+		fmt.Println(fmt.Sprintf("Error getting %s folder", folderName))
+		fmt.Println(err)
+		return "", err
+	}
+	folders = append(folders, files.Files...)
+	if files.NextPageToken != "" {
+		for files.NextPageToken != "" {
+			fmt.Println("Next page token found")
+			files, err = ds.Files.List().
+				Fields("files(id, name), nextPageToken").
+				Q(fmt.Sprintf("'%s' in parents and mimeType = 'application/vnd.google-apps.folder'", ParentFolderID)).
+				PageToken(files.NextPageToken).Do()
+			if err != nil {
+				fmt.Println("Error getting files from folder")
+				panic(err)
+			}
+			folders = append(folders, files.Files...)
+		}
+	}
+	if len(files.Files) < 1 {
+		return "", fmt.Errorf("unable to retrieve folders from google.")
+	}
+	for _, file := range files.Files {
+		if file.Name == folderName {
+			return file.Id, nil
+		}
+	}
+
+	fmt.Println(fmt.Sprintf(" %s Not Found.", folderName))
+
+	// if we get here, we didn't find the folder
+	createFileCall, err := ds.Files.Create(&drive.File{
+		Name:     folderName,
+		MimeType: "application/vnd.google-apps.folder",
+		Parents:  []string{ParentFolderID},
+	}).Do()
+
+	if err != nil {
+		fmt.Println(fmt.Sprintf("Error creating %s folder", folderName))
+		fmt.Println(err)
+		return "", err
+	}
+	fmt.Println("Folder created successfully")
+	return createFileCall.Id, nil
+}
+
+func init() {
+	start = time.Now()
 	err := godotenv.Load()
 	if err != nil {
 		panic(err)
 	}
 
-	surpriceURLGetCost = fmt.Sprintf("%s/api/getCostsFromSheet", os.Getenv("BASE_URL"))
-	surpriceURLUpdateCost = fmt.Sprintf("%s/api/updateCostSkuVault", os.Getenv("BASE_URL"))
+	winsFolderName = fmt.Sprintf("%s Surplus Procurement Wins", time.Now().Format("2006"))
+	fmt.Println("Wins Folder Name: ", winsFolderName)
 
+	lossFolderName := fmt.Sprintf("Surplus Procurement Lost")
+
+	surpriceURLUpdateCost = fmt.Sprintf("%s/api/v1/costSheet/upload", os.Getenv("BASE_URL"))
+	fmt.Println("Surprice URL: ", surpriceURLUpdateCost)
 	ctx := context.Background()
-	ds, err := drive.NewService(ctx, option.WithCredentialsFile("./cert.json"))
-	if err != nil {
+	ds, driveErr := drive.NewService(ctx, option.WithCredentialsFile("./cert.json"))
+	if driveErr != nil {
 		fmt.Println("Error creating new service")
-		panic(err)
+		panic(driveErr)
 	}
 	driveService = ds
 
-	fmt.Println("Service created successfully")
-	fmt.Println("Retro Costing Template ID: ", retroCostingTemplateID)
-	fmt.Println("Procurement Folder ID: ", procurementFolderID)
-
-	ss, err := sheets.NewService(ctx, option.WithCredentialsFile("./SheetCert.json"))
-	if err != nil {
+	ss, sheetsErr := sheets.NewService(ctx, option.WithCredentialsFile("./SheetCert.json"))
+	if sheetsErr != nil {
 		fmt.Println("Error creating new service")
+		panic(sheetsErr)
+	}
+	sheetsService = ss
+
+	winsFolderId, err = getFolderId(driveService, winsFolderName)
+	fmt.Println("Wins Folder ID: ", winsFolderId)
+	if err != nil {
+		fmt.Println("Error getting wins folder")
+		fmt.Println(err)
 		panic(err)
 	}
 
-	sheetsService = ss
+	lossesFolderId, err = getFolderId(driveService, lossFolderName)
+	fmt.Println("Losses Folder ID: ", lossesFolderId)
+
+	if err != nil {
+		fmt.Println("Error getting lost folder")
+		fmt.Println(err)
+		panic(err)
+	}
+
 }
 
-// ShouldBeSentToCost
-// This function determines if a pricing sheet has a final offer amount.
-// if it does, it returns the amount as an integer
-// if it does not, it returns 0
-func ShouldBeSentToCost(sheetID string) (cost int, err error) {
+func decideSheet(result modules.WorkerResult) (sheetId string, hasCostSheet bool, sheetFound bool, name string) {
+	var resultFileDetails modules.FileDetails
+	for _, fileDetails := range result.FileDetails {
+		if strings.Contains(fileDetails.Name, "Cost Sheet") {
+			fmt.Println("Cost Sheet Found : ", fileDetails.Name)
+			return fileDetails.Id, true, true, fileDetails.Name
+		}
+
+		if len(strings.Split(fileDetails.Name, "-")) == 3 {
+			resultFileDetails = fileDetails
+			sheetId = fileDetails.Id
+			sheetFound = true
+			hasCostSheet = false
+			name = fileDetails.Name
+		}
+	}
+
+	if sheetFound {
+		fmt.Println("No Cost Sheet was found. \n Using the pricing sheet : ", resultFileDetails.Name)
+		return sheetId, hasCostSheet, sheetFound, name
+	}
+
+	return "", false, false, ""
+
+}
+
+func ShouldBeSentToCost(sheetID string) (cost int, hasCost bool, err error) {
 	var sheetAcceptedOffer string = "T3"
 	sheetRange := fmt.Sprintf("Final Offer!%s", sheetAcceptedOffer)
 	fmt.Println("Sheet Range: ", sheetRange)
 	resp, err := sheetsService.Spreadsheets.Values.Get(sheetID, sheetRange).Do()
 	if err != nil {
 		fmt.Println("Error getting sheet")
-		fmt.Println("Sheet ID: ", sheetID)
 		fmt.Println(err)
-		return 0, err
+		var maxRetries = 3
+		var retryTimeout = 1
+		// implement a exponential backoff algorithm
+		fmt.Println("Retrying Due to Google Err")
+		for i := 0; i < maxRetries; i++ {
+			time.Sleep(time.Duration(retryTimeout) * time.Millisecond)
+			resp, err = sheetsService.Spreadsheets.Values.Get(sheetID, sheetRange).Do()
+			if err != nil {
+				retryTimeout = retryTimeout * 2
+				continue
+			}
+			break
+		}
+		if err != nil {
+			fmt.Println("Retries exhausted")
+			fmt.Println("Error getting sheet")
+			fmt.Println(err)
+			return 0, false, err
+		}
 	}
 	fmt.Println("Response: ", modules.PrettyPrint(resp))
 	if len(resp.Values) < 1 {
 		fmt.Println("No data found in row")
-		return 0, nil
+		return 0, false, nil
 	}
 	if len(resp.Values[0]) < 1 {
 		fmt.Println("No data found in cell")
-		return 0, nil
+		return 0, false, nil
 	}
 	fmt.Println("Data: ", resp.Values[0][0])
 
@@ -112,7 +234,7 @@ func ShouldBeSentToCost(sheetID string) (cost int, err error) {
 		panic(err)
 	}
 
-	return cost, nil
+	return cost, true, nil
 }
 
 func CreateCostSheet(sheetID string, parentFolderId string, cost int) (respId string, costSheetName string, err error) {
@@ -179,69 +301,175 @@ func CreateCostSheet(sheetID string, parentFolderId string, cost int) (respId st
 	return resp.Id, costSheetName, nil
 }
 
-func handleInterrupt() {
-	c := make(chan os.Signal)
-	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		<-c
-		status.Running = false
-		status.Save()
-		os.Exit(1)
-	}()
+func moveToFolder(folderID string, destFolderId string) (bool, error) {
+	_, err := driveService.Files.Update(folderID, &drive.File{}).AddParents(destFolderId).RemoveParents(procurementFolderID).Do()
+	if err != nil {
+		fmt.Println("Error moving folder")
+		fmt.Println(err)
+		return false, err
+
+	}
+	fmt.Println("Folder moved successfully")
+	return true, nil
 }
 
-func handleRunning() {
-	status.Running = true
-	status.Save()
+func moveToWinsFolder(folderId string) (bool, error) {
+	return moveToFolder(folderId, winsFolderId)
+}
+func moveToLossesFolder(folderId string) (bool, error) {
+	return moveToFolder(folderId, lossesFolderId)
 }
 
-func decideSheet(result modules.WorkerResult) (sheetId string, hasCostSheet bool, sheetFound bool) {
-
-	for _, fileDetails := range result.FileDetails {
-		if strings.Contains(fileDetails.Name, "Cost Sheet") {
-			return fileDetails.Id, true, true
+func handleNoCostSheet(sheetID string, result modules.WorkerResult, sheetName string) (costSheetId string, shouldSkip bool, needsTimeout bool, err error) {
+	isSuspended, err := modules.IsMarkedSuspended(sheetID)
+	if err != nil {
+		fmt.Println("Error checking if sheet is marked suspended")
+		fmt.Println(err)
+		return "", true, false, err
+	}
+	if isSuspended {
+		fmt.Println("Sheet is marked suspended")
+		return "", true, false, nil
+	}
+	isForgotten, err := modules.IsMarkedForgotten(sheetID)
+	if err != nil {
+		fmt.Println("Error checking if sheet is marked suspended")
+		fmt.Println(err)
+		return "", true, false, err
+	}
+	if isForgotten {
+		fmt.Println("Sheet is marked forgotten")
+		return "", true, false, nil
+	}
+	cost, hasCost, err := ShouldBeSentToCost(sheetID)
+	if err != nil {
+		fmt.Println("Error getting cost")
+		fmt.Println(err)
+		return "", true, true, err
+	}
+	if hasCost {
+		createdSheetID, costSheetName, err := CreateCostSheet(sheetID, result.ParentFolderId, cost)
+		if err != nil {
+			fmt.Println("Error creating cost sheet")
+			fmt.Println(err)
+			return "", true, true, err
 		}
-		if len(strings.Split(fileDetails.Name, "-")) == 3 {
-			sheetId = fileDetails.Id
-			sheetFound = true
-			hasCostSheet = false
-		}
+		fmt.Println("Cost Sheet ID: ", createdSheetID)
+		fmt.Println("Cost Sheet Name: ", costSheetName)
+		fmt.Println("Cost Sheet created successfully")
+		return createdSheetID, false, true, nil
 	}
 
-	if sheetFound {
-		return sheetId, hasCostSheet, sheetFound
+	fmt.Println("No cost found")
+	fmt.Println("Sheet Age: ", result.Age)
+	if result.Age >= 60 {
+		fmt.Println("Sheet is older than 60 days -> Checking Insightly to see if it is lost")
+		var oppId string = strings.Split(sheetName, "-")[2]
+		if oppId == "" {
+			fmt.Println("No opportunity ID found")
+			fmt.Println("-=-=-=-=-=-=-=-=-=-=-=-")
+			return "", true, true, nil
+		}
+		fmt.Println("Opportunity ID: ", oppId)
+		var i models.InsightlyData
+		message, err := i.GetOpportunity(oppId)
+		if err != nil {
+			fmt.Println("Error getting opportunity. Opportunity may not exist.")
+			fmt.Println(err)
+			if strings.Contains(err.Error(), "json: cannot unmarshal") {
+				fmt.Println("Opportunity not found")
+				folderWasMoved, err := moveToLossesFolder(result.ParentFolderId)
+				if err != nil {
+					fmt.Println("Error moving folder")
+					fmt.Println(err)
+					return "", true, true, err
+				}
+				if folderWasMoved {
+					fmt.Println("-=-=-=-=-=-=-=-=-=-=-=-")
+					return "", true, true, nil
+				}
+				fmt.Println("-=-=-=-=-=-=-=-=-=-=-=-")
+				return "", true, true, nil
+			}
+			return "", true, true, err
+		}
+		fmt.Println(message)
+		if i.IsAbandoned() {
+			fmt.Println("Opportunity is abandoned")
+			folderWasMoved, err := moveToLossesFolder(result.ParentFolderId)
+			if err != nil {
+				fmt.Println("Error moving folder")
+				fmt.Println(err)
+				return "", true, true, err
+			}
+			if folderWasMoved {
+				fmt.Println("-=-=-=-=-=-=-=-=-=-=-=-")
+				return "", true, true, nil
+			}
+		}
+		if i.IsWon() {
+			fmt.Println("Opportunity is won")
+			folderWasMoved, err := moveToWinsFolder(result.ParentFolderId)
+			if err != nil {
+				fmt.Println("Error moving folder")
+				fmt.Println(err)
+				return "", true, true, err
+			}
+			if folderWasMoved {
+				fmt.Println("-=-=-=-=-=-=-=-=-=-=-=-")
+				return "", true, true, nil
+			}
+		}
+		if i.IsSuspended() {
+			fmt.Println("Opportunity is suspended")
+			marked, err := modules.MarkSheetSuspended(sheetID, sheetName)
+			if err != nil {
+				fmt.Println("Error marking sheet suspended")
+				fmt.Println(err)
+				return "", true, true, err
+			}
+			if marked {
+				fmt.Println("Sheet marked as suspended")
+			} else {
+				fmt.Println("Sheet not marked as suspended")
+			}
+			return "", true, true, nil
+		}
+		if i.IsOpen() {
+			fmt.Println("Sheet is older than 60 days -> Marking as forgotten")
+			marked, err := modules.MarkSheetForgotten(sheetID, sheetName)
+			if err != nil {
+				fmt.Println("Error marking sheet as forgotten")
+				fmt.Println(err)
+				return "", true, true, err
+			}
+			if marked {
+				fmt.Println("Sheet marked as forgotten")
+			} else {
+				fmt.Println("Sheet not marked as forgotten")
+			}
+			return "", true, true, nil
+		}
+		fmt.Println("Opportunity is not lost or suspended")
+		fmt.Println("Opp ID: ", oppId)
+		fmt.Println("Opp State: ", i.OpportunityState)
 	}
-
-	return "", false, false
-
+	return "", true, true, err
 }
 
 func main() {
-	// if the program is running and interrupted with ctrl + c then set the status to not running
-	handleInterrupt()
-
-	// if the program is already running then return
-	fmt.Println("Status: ", status.Running)
-	if status.Running {
-		fmt.Println("Already running")
-		return
-	}
-	handleRunning()
-	defer func() {
-		status.Running = false
-		status.Save()
-	}()
-
-	fmt.Println("Starting main function")
-
+	elapsedTimeWaitingForAPI := 0
+	processedFiles := 0
+	sleeplessFiles := 0
 	var fileList []*drive.File
-	defer p.SaveDrives()
-
-	files, err := driveService.Files.List().
+	files, err := driveService.
+		Files.
+		List().
 		Fields("files(id, name), nextPageToken").
-		Q(fmt.Sprintf("'%s' in parents and mimeType = 'application/vnd.google-apps.folder'", procurementFolderID)).Do()
+		Q(fmt.Sprintf("'%s' in parents and mimeType = 'application/vnd.google-apps.folder'", procurementFolderID)).
+		Do()
 	if err != nil {
-		fmt.Println("Error getting files from folder")
+		fmt.Println("Error fetching files")
 		panic(err)
 	}
 	fileList = append(fileList, files.Files...)
@@ -260,20 +488,8 @@ func main() {
 		}
 	}
 
-	fmt.Println("Files Length: ", len(fileList))
-	// remove any files from the file list in p.Drives
-	for _, storageDrive := range p.Drives {
-		// storageDrive = strings.Split(storageDrive, "-")[0]
-		for i, file := range fileList {
-			if file.Name == storageDrive {
-				fmt.Println("Removing file: ", file.Name)
-				fileList = append(fileList[:i], fileList[i+1:]...)
-			}
-		}
-	}
-	fmt.Println("Files Length: ", len(fileList))
+	fmt.Printf("Found %d files", len(fileList))
 	jobs, results, wg := modules.SetupWorkers(10, len(fileList))
-	fmt.Println("Jobs, Results and WaitGroup created successfully")
 
 	for _, file := range fileList {
 		slices := strings.Split(file.Name, "-")
@@ -284,7 +500,6 @@ func main() {
 			continue
 		}
 	}
-
 	close(jobs)
 	fmt.Println("Jobs channel closed")
 
@@ -296,96 +511,147 @@ func main() {
 	fmt.Println("-=-=-=-=-=-=-=-=-=-=-=-")
 
 	for result := range results {
-		fmt.Println("Result :", result)
-
-		var costSheetName, costSheetID string
-		var cost int
-		//todo make sure we are properly handling all cases
-		sheetID, hasCostSheet, sheetFound := decideSheet(result)
+		fmt.Println()
+		processedFiles++
+		var costSheetID string
+		sheetID, hasCostSheet, sheetFound, chosenSheetName := decideSheet(result)
 		if !sheetFound {
 			fmt.Println("Sheet not found")
 			fmt.Println("-=-=-=-=-=-=-=-=-=-=-=-")
+			countDownTimer(timeout)
 			continue
 		}
+
 		if hasCostSheet {
 			costSheetID = sheetID
 		} else {
-			fmt.Println("Sheet found but no cost sheet")
-			cost, err = ShouldBeSentToCost(sheetID)
-			if err != nil {
-				fmt.Println("Error getting cost")
-				fmt.Println(err)
-				fmt.Println("-=-=-=-=-=-=-=-=-=-=-=-")
+			csID, shouldSkip, needsTimeout, handleCostErr := handleNoCostSheet(sheetID, result, chosenSheetName)
+			if handleCostErr != nil {
+				fmt.Println("Error handling no cost sheet")
+				fmt.Println(handleCostErr)
+				countDownTimer(timeout)
 				continue
 			}
-			if cost == 0 {
-				fmt.Println("Cost is 0, sleeping...")
+			if shouldSkip {
+				fmt.Println("-=-=-=-=-=-=-=-=-=-=-=-")
+				if needsTimeout {
+					countDownTimer(timeout)
+				} else {
+					sleeplessFiles++
+				}
+				continue
+			}
+			if csID == "" {
+				fmt.Println("No cost sheet ID found")
 				fmt.Println("-=-=-=-=-=-=-=-=-=-=-=-")
 				countDownTimer(timeout)
 				continue
 			}
-			costSheetID, costSheetName, err = CreateCostSheet(sheetID, result.ParentFolderId, cost)
+			costSheetID = csID
+		}
+
+		// At this point we have verfied that we need to process as sheet and have a costSheetID
+		sheetUrl := fmt.Sprintf("https://docs.google.com/spreadsheets/d/%s/edit#gid=0", costSheetID)
+		fmt.Println("Calling the Drive Parser with Sheet URL -> : ", sheetUrl)
+		jsonData := models.DriveParserResponse{}
+		startApiCall := time.Now()
+		err := CallDriveParser(fmt.Sprintf(`{"url": "%s"}`, sheetUrl), &jsonData)
+		if err != nil {
+			fmt.Println("Error calling Drive Parser")
+			fmt.Println(err)
+			countDownTimer(timeout)
+			continue
+		}
+		elapsedTimeWaitingForAPI += int(time.Since(startApiCall).Seconds())
+		fmt.Println("Response Message: ", jsonData.Message)
+		if !jsonData.Error {
+
+			moved, err := moveToWinsFolder(result.ParentFolderId)
 			if err != nil {
-				fmt.Println("This is the error")
-				fmt.Println("Error creating cost sheet")
+				fmt.Println("Error moving folder")
 				fmt.Println(err)
+				countDownTimer(timeout)
 				continue
 			}
-		}
 
-		fmt.Println("Cost Sheet ID: ", costSheetID)
-		fmt.Println("Parsing the sheet")
-		fmt.Println(surpriceURLGetCost)
-
-		sheetUrl := fmt.Sprintf("https://docs.google.com/spreadsheets/d/%s/edit#gid=0", costSheetID)
-		fmt.Println("Sheet URL: ", sheetUrl)
-		priceResp, err := http.Post(surpriceURLGetCost, "application/json", strings.NewReader(fmt.Sprintf(`{"url": "%s"}`, sheetUrl)))
-		if err != nil {
-			fmt.Println("Error getting cost from Surprice")
-			fmt.Println(err)
-			panic(err)
-		}
-
-		var surpriceResponse models.SurpriceResponse
-		err = surpriceResponse.JSON(priceResp)
-		if err != nil {
-			fmt.Println("Error reading response body")
-			fmt.Println(err)
-			countDownTimer(timeout)
-			continue
-		}
-		if surpriceResponse.Error {
-			fmt.Println("Error getting cost from Surprice")
-			fmt.Println("Surprice Response", modules.PrettyPrint(surpriceResponse))
-			countDownTimer(timeout)
-			continue
-		}
-		if !surpriceResponse.IsSubmitted {
-			fmt.Println("Sheet not submitted")
-			fmt.Println("Surprice Response", modules.PrettyPrint(surpriceResponse))
-
-			updateCostResp, err := http.Post(surpriceURLUpdateCost, "application/json", strings.NewReader(fmt.Sprintf(`{"cost": %d, "url": "%s"}`, cost, sheetUrl)))
-			if err != nil {
-				p.AddCostSheetNotSubmitted(costSheetName)
-				fmt.Println("Error updating cost on Surprice")
+			if moved {
+				fmt.Println("Folder moved successfully")
 			}
-			// get the status code
-			fmt.Println("Update Cost Response: ", updateCostResp.StatusCode)
-			if updateCostResp.StatusCode != 200 {
-				p.AddCostSheetNotSubmitted(costSheetName)
-				fmt.Println("Sheet was not updated successfully Skipping")
+			if jsonData.Message == "Sheet has already been processed" || jsonData.Message == "PO Already Exists" {
+				fmt.Println("Sheet has already been processed")
+				fmt.Println("-=-=-=-=-=-=-=-=-=-=-=-")
+			} else if jsonData.Message == "PO Created Successfully" {
+				fmt.Println("Sheet was successfully processed and sent to sku vault")
+				fmt.Println("-=-=-=-=-=-=-=-=-=-=-=-")
 			} else {
-				fmt.Println("Sheet updated successfully")
-				p.AddDrive(costSheetName)
+				fmt.Println("No Explicit handler for : ", jsonData.Message)
+				fmt.Println("-=-=-=-=-=-=-=-=-=-=-=-")
 			}
-			fmt.Println("-=-=-=-=-=-=-=-=-=-=-=-")
 			countDownTimer(timeout)
-		} else {
-			fmt.Println("Sheet already submitted")
-			p.AddDrive(costSheetName)
-			countDownTimer(timeout)
-		}
+			continue
 
+		}
+		trimmedMessage := strings.TrimSpace(jsonData.Message)
+		switch trimmedMessage {
+		case "Supplier Name could not be determined":
+			fmt.Println("Supplier Name could not be determined")
+			fmt.Println("-=-=-=-=-=-=-=-=-=-=-=-")
+		case "Some items were skipped because they had no SKU or Quantity":
+			fmt.Println("Items: ", jsonData.Data)
+			fmt.Println("-=-=-=-=-=-=-=-=-=-=-=-")
+		case "Error updating sheet: Request failed with status code 502":
+			fmt.Println("Retrying Sheet")
+			for retries := 0; retries < 2; retries++ {
+				err := CallDriveParser(fmt.Sprintf(`{"url": "%s"}`, sheetUrl), &jsonData)
+				if err != nil {
+					fmt.Println("Error calling Drive Parser")
+					fmt.Println(err)
+					continue
+				}
+				if jsonData.Message == "Error updating sheet: Request failed with status code 502" {
+					fmt.Println("Retrying")
+					continue
+				}
+				break
+			}
+			fmt.Println("Unable to process sheet after retries")
+			fmt.Println("-=-=-=-=-=-=-=-=-=-=-=-")
+		case "PO Already Exists":
+			fmt.Println("PO Already Exists")
+			moved, err := moveToWinsFolder(result.ParentFolderId)
+			if err != nil {
+				fmt.Println("Error moving folder")
+				fmt.Println(err)
+				fmt.Println("-=-=-=-=-=-=-=-=-=-=-=-")
+			}
+			if moved {
+				fmt.Println("Folder moved successfully")
+				fmt.Println("-=-=-=-=-=-=-=-=-=-=-=-")
+			}
+		default:
+			fmt.Println("No Explicit handler for : ", trimmedMessage)
+			fmt.Println("-=-=-=-=-=-=-=-=-=-=-=-")
+		}
+		countDownTimer(timeout)
+		continue
 	}
+	fmt.Println()
+	fmt.Println("All files processed")
+	elapsed := time.Since(start)
+	fmt.Println(fmt.Sprintf("Processed %d Files", processedFiles))
+	fmt.Println(fmt.Sprintf("Total Execution time: %s", elapsed))
+	secondsSleeping := (processedFiles - 2 - sleeplessFiles) * timeout
+
+	durationSleeping := time.Duration(secondsSleeping * int(time.Second))
+	percentOfExecutionTime := (durationSleeping.Seconds() / elapsed.Seconds()) * 100
+	fmt.Println(fmt.Sprintf("Total time sleeping: %s || %.2f%% Percentage of total execution time ", durationSleeping, percentOfExecutionTime))
+
+	durationWaitingForApi := time.Duration(elapsedTimeWaitingForAPI) * time.Second
+	percentOfExecutionTime = (durationWaitingForApi.Seconds() / elapsed.Seconds()) * 100
+	fmt.Println(fmt.Sprintf("Total time waiting for Drive Parser API: %s || %.2f%% Percentage of total execution time", durationWaitingForApi, percentOfExecutionTime))
+
+	localProcessingTime := elapsed - durationWaitingForApi - durationSleeping
+	percentOfExecutionTime = (localProcessingTime.Seconds() / elapsed.Seconds()) * 100
+	fmt.Println(fmt.Sprintf("Total time Processing Data locally: %s || %.2f%% Percentage of total execution time", localProcessingTime, percentOfExecutionTime))
 
 }
