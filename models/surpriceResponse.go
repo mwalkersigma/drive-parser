@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
+	"time"
 )
 
 type Component struct {
@@ -107,4 +109,46 @@ type DriveStatusResponse struct {
 
 func (d DriveStatusResponse) String() string {
 	return fmt.Sprintf("Error: %t\nMessage: %s\nData: %v", d.Error, d.Message, d.Data.String())
+}
+
+type Statistics struct {
+	Start                             time.Time `json:"start"`
+	End                               time.Time `json:"end"`
+	Completed                         bool      `json:"completed"`
+	TotalFiles                        int       `json:"totalFiles"`
+	SkippedFiles                      int       `json:"skippedFiles"`
+	ProcessedFiles                    int       `json:"processedFiles"`
+	CallsToDriveParser                int       `json:"callsToDriveParser"`
+	PosGenerated                      int       `json:"posGenerated"`
+	TotalExecutionTime                string    `json:"totalExecutionTime"`
+	TotalTimeSleeping                 string    `json:"totalTimeSleeping"`
+	TotalTimeWaitingForDriveParserApi string    `json:"totalTimeWaitingForDriveParserApi"`
+}
+
+func (s *Statistics) SendStats(url string, client *http.Client) {
+	statsJson, err := json.Marshal(s)
+	if err != nil {
+		fmt.Println("Error marshalling stats")
+		fmt.Println(err)
+		return
+	}
+	resp, err := client.Post(url, "application/json", strings.NewReader(string(statsJson)))
+	if err != nil {
+		fmt.Println("Error sending stats")
+		fmt.Println(err)
+		return
+	}
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+			fmt.Println("Error closing response body")
+			fmt.Println(err)
+		}
+	}(resp.Body)
+
+	if resp.StatusCode != 200 {
+		fmt.Println("Error sending stats")
+		fmt.Println(resp.Status)
+	}
+	fmt.Println("Stats sent successfully")
 }

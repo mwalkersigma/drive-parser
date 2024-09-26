@@ -30,6 +30,7 @@ var surpriceURLUpdateCost, winsFolderName string
 
 var timeout = 1
 var start time.Time
+var client = &http.Client{Timeout: 60 * time.Second * 5}
 
 func countDownTimer(duration int) {
 	for i := duration; i > 0; i-- {
@@ -39,9 +40,7 @@ func countDownTimer(duration int) {
 	}
 }
 
-// 16OCblUaerCao9CtoRjl69HaOvcZhYdMwW3dmzzI_E3I
 func CallDriveParser(body string, target interface{}) error {
-	var client = &http.Client{Timeout: 60 * time.Second * 5}
 	resp, err := client.Post(surpriceURLUpdateCost, "application/json", strings.NewReader(body))
 	if err != nil {
 		fmt.Println("Error calling Drive Parser")
@@ -461,6 +460,9 @@ func main() {
 	elapsedTimeWaitingForAPI := 0
 	processedFiles := 0
 	sleeplessFiles := 0
+	callsToDriveParser := 0
+	posGenerated := 0
+
 	var fileList []*drive.File
 	files, err := driveService.
 		Files.
@@ -555,6 +557,7 @@ func main() {
 		fmt.Println("Calling the Drive Parser with Sheet URL -> : ", sheetUrl)
 		jsonData := models.DriveParserResponse{}
 		startApiCall := time.Now()
+		callsToDriveParser++
 		err := CallDriveParser(fmt.Sprintf(`{"url": "%s"}`, sheetUrl), &jsonData)
 		if err != nil {
 			fmt.Println("Error calling Drive Parser")
@@ -581,6 +584,7 @@ func main() {
 				fmt.Println("Sheet has already been processed")
 				fmt.Println("-=-=-=-=-=-=-=-=-=-=-=-")
 			} else if jsonData.Message == "PO Created Successfully" {
+				posGenerated++
 				fmt.Println("Sheet was successfully processed and sent to sku vault")
 				fmt.Println("-=-=-=-=-=-=-=-=-=-=-=-")
 			} else {
@@ -637,9 +641,11 @@ func main() {
 	}
 	fmt.Println()
 	fmt.Println("All files processed")
-	elapsed := time.Since(start)
+	end := time.Now()
+	elapsed := end.Sub(start)
 	fmt.Println(fmt.Sprintf("Processed %d Files", processedFiles))
 	fmt.Println(fmt.Sprintf("Total Execution time: %s", elapsed))
+	fmt.Println(fmt.Sprintf("Total POs Generated: %d", posGenerated))
 	secondsSleeping := (processedFiles - 2 - sleeplessFiles) * timeout
 
 	durationSleeping := time.Duration(secondsSleeping * int(time.Second))
@@ -648,10 +654,29 @@ func main() {
 
 	durationWaitingForApi := time.Duration(elapsedTimeWaitingForAPI) * time.Second
 	percentOfExecutionTime = (durationWaitingForApi.Seconds() / elapsed.Seconds()) * 100
+	fmt.Println(fmt.Sprintf("Total Calls to Drive Parser API: %d", callsToDriveParser))
 	fmt.Println(fmt.Sprintf("Total time waiting for Drive Parser API: %s || %.2f%% Percentage of total execution time", durationWaitingForApi, percentOfExecutionTime))
 
 	localProcessingTime := elapsed - durationWaitingForApi - durationSleeping
 	percentOfExecutionTime = (localProcessingTime.Seconds() / elapsed.Seconds()) * 100
 	fmt.Println(fmt.Sprintf("Total time Processing Data locally: %s || %.2f%% Percentage of total execution time", localProcessingTime, percentOfExecutionTime))
 
+	fmt.Println("Sending Statistics to Surtrics")
+
+	stats := models.Statistics{
+		Start:                             start,
+		End:                               end,
+		Completed:                         true,
+		TotalFiles:                        len(fileList),
+		SkippedFiles:                      sleeplessFiles,
+		ProcessedFiles:                    processedFiles,
+		CallsToDriveParser:                callsToDriveParser,
+		PosGenerated:                      posGenerated,
+		TotalExecutionTime:                elapsed.String(),
+		TotalTimeSleeping:                 durationSleeping.String(),
+		TotalTimeWaitingForDriveParserApi: durationWaitingForApi.String(),
+	}
+	url := fmt.Sprintf("%s/run", surpriceURLUpdateCost)
+	fmt.Println("Sending Stats to: ", url)
+	stats.SendStats(url, client)
 }
