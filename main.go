@@ -30,6 +30,7 @@ var sheetsService *sheets.Service
 var surpriceURLUpdateCost, winsFolderName string
 
 var timeout = 1
+var rateLimitSleep = 0
 var config models.ConfigJson
 var start time.Time
 var client = &http.Client{Timeout: 60 * time.Second * 5}
@@ -202,13 +203,27 @@ func ShouldBeSentToCost(sheetID string) (cost int, hasCost bool, err error) {
 		fmt.Println(err)
 		var maxRetries = 3
 		var retryTimeout = 1
+		if strings.Contains(err.Error(), "googleapi: Error 429") {
+			retryTimeout = 60
+			rateLimitSleep++
+			fmt.Println("Google API Limit Reached Waiting for 60 seconds")
+		} else {
+			fmt.Println("Retrying Due to Google Err")
+		}
 		// implement a exponential backoff algorithm
-		fmt.Println("Retrying Due to Google Err")
 		for i := 0; i < maxRetries; i++ {
+			fmt.Println("Retry Attempt: ", i+1)
 			time.Sleep(time.Duration(retryTimeout) * time.Millisecond)
 			resp, err = sheetsService.Spreadsheets.Values.Get(sheetID, sheetRange).Do()
 			if err != nil {
-				retryTimeout = retryTimeout * 2
+				if strings.Contains(err.Error(), "googleapi: Error 429") {
+					rateLimitSleep++
+					fmt.Println("Google API Limit Reached Waiting for 60 seconds")
+					retryTimeout = 60
+				} else {
+					fmt.Println("Retrying Due to Google Err")
+					retryTimeout = retryTimeout * 2
+				}
 				continue
 			}
 			break
@@ -655,7 +670,9 @@ func main() {
 	fmt.Println(fmt.Sprintf("Processed %d Files", processedFiles))
 	fmt.Println(fmt.Sprintf("Total Execution time: %s", elapsed))
 	fmt.Println(fmt.Sprintf("Total POs Generated: %d", posGenerated))
-	secondsSleeping := (processedFiles - 2 - sleeplessFiles) * timeout
+	secondsWaitingForRateLimit := rateLimitSleep * 60
+	fmt.Println(fmt.Sprintf("Total Time Waiting for Rate Limit: %d seconds", secondsWaitingForRateLimit))
+	secondsSleeping := ((processedFiles - 2 - sleeplessFiles) * timeout) + secondsWaitingForRateLimit
 
 	durationSleeping := time.Duration(secondsSleeping * int(time.Second))
 	percentOfExecutionTime := (durationSleeping.Seconds() / elapsed.Seconds()) * 100

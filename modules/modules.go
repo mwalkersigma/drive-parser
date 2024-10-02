@@ -119,9 +119,7 @@ func MarkSheet(reason string, resolution string) func(string, string) (bool, err
 	return func(sheetID string, title string) (bool, error) {
 		var client = &http.Client{Timeout: 60 * time.Second * 5}
 		expectedSuccessResponse := "Sheet has been marked with failure reason"
-		fmt.Println("URL: ", surpriceURLSuspendSheet)
 		body := fmt.Sprintf(`{"sheetID": "%s", "reason": "%s", "resolution": "%s", "title": "%s"}`, sheetID, reason, resolution, title)
-		fmt.Println("Body: ", body)
 		resp, err := client.Post(surpriceURLSuspendSheet,
 			"application/json",
 			strings.NewReader(body))
@@ -189,6 +187,10 @@ func IsMarked(failureReason string) func(string) (bool, error) {
 		receivedReason := target.Data.SheetFailureReason
 		if failureReason == receivedReason && !target.Data.IsReviewed {
 			return true, nil
+		}
+		if failureReason == receivedReason && target.Data.IsReviewed {
+			fmt.Println("Sheet has been reviewed. Retrying")
+			return false, nil
 		}
 		if target.Data.SheetFailureReason != "" {
 			fmt.Println("Failure Reason did not match expected")
