@@ -30,6 +30,7 @@ var sheetsService *sheets.Service
 var surpriceURLUpdateCost, winsFolderName string
 
 var timeout = 1
+var config models.ConfigJson
 var start time.Time
 var client = &http.Client{Timeout: 60 * time.Second * 5}
 
@@ -116,6 +117,13 @@ func init() {
 	if err != nil {
 		panic(err)
 	}
+	err = config.GetConfig()
+	if err != nil {
+		fmt.Println("Error getting config")
+		fmt.Println(err)
+		panic(err)
+	}
+	timeout = config.SleepTimeOut
 
 	winsFolderName = fmt.Sprintf("%s Surplus Procurement Wins", time.Now().Format("2006"))
 	fmt.Println("Wins Folder Name: ", winsFolderName)
