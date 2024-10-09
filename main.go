@@ -9,8 +9,8 @@ import (
 	"github.com/mwalkersigma/drive-parser/modules"
 	drive "google.golang.org/api/drive/v3"
 	"google.golang.org/api/option"
-	"google.golang.org/api/sheets/v4"
 	_ "google.golang.org/api/sheets/v4"
+	sheets "google.golang.org/api/sheets/v4"
 	"io"
 	"net/http"
 	"os"
@@ -33,6 +33,7 @@ var timeout = 1
 var rateLimitSleep = 0
 var config models.ConfigJson
 var start time.Time
+var timeSleepingGettingCost = 0
 var client = &http.Client{Timeout: 60 * time.Second * 5}
 
 func countDownTimer(duration int) {
@@ -47,7 +48,6 @@ func CallDriveParser(body string, target interface{}) error {
 	resp, err := client.Post(surpriceURLUpdateCost, "application/json", strings.NewReader(body))
 	if err != nil {
 		fmt.Println("Error calling Drive Parser")
-		fmt.Println(err)
 		return err
 	}
 	defer func(Body io.ReadCloser) {
@@ -197,6 +197,12 @@ func ShouldBeSentToCost(sheetID string) (cost int, hasCost bool, err error) {
 	var sheetAcceptedOffer string = "T3"
 	sheetRange := fmt.Sprintf("Final Offer!%s", sheetAcceptedOffer)
 	fmt.Println("Sheet Range: ", sheetRange)
+	callStartTime := time.Now()
+	defer func() {
+		timeTaken := time.Since(callStartTime)
+		timeSleepingGettingCost += int(timeTaken.Seconds())
+		fmt.Println("Time taken to get cost: ", timeTaken)
+	}()
 	resp, err := sheetsService.Spreadsheets.Values.Get(sheetID, sheetRange).Do()
 	if err != nil {
 		fmt.Println("Error getting sheet")
@@ -665,8 +671,10 @@ func main() {
 	}
 	fmt.Println()
 	fmt.Println("All files processed")
+
 	end := time.Now()
 	elapsed := end.Sub(start)
+	durationWaitingForCost := time.Duration(timeSleepingGettingCost) * time.Second
 	fmt.Println(fmt.Sprintf("Processed %d Files", processedFiles))
 	fmt.Println(fmt.Sprintf("Total Execution time: %s", elapsed))
 	fmt.Println(fmt.Sprintf("Total POs Generated: %d", posGenerated))
@@ -699,6 +707,7 @@ func main() {
 		CallsToDriveParser:                callsToDriveParser,
 		PosGenerated:                      posGenerated,
 		TotalExecutionTime:                elapsed.String(),
+		TotalTimeWaitingForCost:           durationWaitingForCost.String(),
 		TotalTimeSleeping:                 durationSleeping.String(),
 		TotalTimeWaitingForDriveParserApi: durationWaitingForApi.String(),
 	}

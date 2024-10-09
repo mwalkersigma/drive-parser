@@ -122,6 +122,7 @@ type Statistics struct {
 	PosGenerated                      int       `json:"posGenerated"`
 	TotalExecutionTime                string    `json:"totalExecutionTime"`
 	TotalTimeSleeping                 string    `json:"totalTimeSleeping"`
+	TotalTimeWaitingForCost           string    `json:"totalTimeWaitingForCost"`
 	TotalTimeWaitingForDriveParserApi string    `json:"totalTimeWaitingForDriveParserApi"`
 }
 
