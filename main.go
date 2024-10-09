@@ -674,7 +674,7 @@ func main() {
 
 	end := time.Now()
 	elapsed := end.Sub(start)
-	durationWaitingForCost := time.Duration(timeSleepingGettingCost) * time.Second
+
 	fmt.Println(fmt.Sprintf("Processed %d Files", processedFiles))
 	fmt.Println(fmt.Sprintf("Total Execution time: %s", elapsed))
 	fmt.Println(fmt.Sprintf("Total POs Generated: %d", posGenerated))
@@ -686,12 +686,16 @@ func main() {
 	percentOfExecutionTime := (durationSleeping.Seconds() / elapsed.Seconds()) * 100
 	fmt.Println(fmt.Sprintf("Total time sleeping: %s || %.2f%% Percentage of total execution time ", durationSleeping, percentOfExecutionTime))
 
+	durationWaitingForCost := time.Duration(timeSleepingGettingCost) * time.Second
+	percentOfExecutionTime = (durationWaitingForCost.Seconds() / elapsed.Seconds()) * 100
+	fmt.Println(fmt.Sprintf("Total time waiting for cost: %s || %.2f%% Percentage of total execution time", durationWaitingForCost, percentOfExecutionTime))
+
 	durationWaitingForApi := time.Duration(elapsedTimeWaitingForAPI) * time.Second
 	percentOfExecutionTime = (durationWaitingForApi.Seconds() / elapsed.Seconds()) * 100
 	fmt.Println(fmt.Sprintf("Total Calls to Drive Parser API: %d", callsToDriveParser))
 	fmt.Println(fmt.Sprintf("Total time waiting for Drive Parser API: %s || %.2f%% Percentage of total execution time", durationWaitingForApi, percentOfExecutionTime))
 
-	localProcessingTime := elapsed - durationWaitingForApi - durationSleeping
+	localProcessingTime := elapsed - durationWaitingForApi - durationSleeping - durationWaitingForCost
 	percentOfExecutionTime = (localProcessingTime.Seconds() / elapsed.Seconds()) * 100
 	fmt.Println(fmt.Sprintf("Total time Processing Data locally: %s || %.2f%% Percentage of total execution time", localProcessingTime, percentOfExecutionTime))
 
