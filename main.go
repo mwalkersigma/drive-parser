@@ -86,7 +86,7 @@ func getFolderId(ds *drive.Service, folderName string) (string, error) {
 		}
 	}
 	if len(files.Files) < 1 {
-		return "", fmt.Errorf("unable to retrieve folders from google.")
+		return "", fmt.Errorf("unable to retrieve folders from google")
 	}
 	for _, file := range files.Files {
 		if file.Name == folderName {
@@ -194,7 +194,7 @@ func decideSheet(result modules.WorkerResult) (sheetId string, hasCostSheet bool
 }
 
 func ShouldBeSentToCost(sheetID string) (cost int, hasCost bool, err error) {
-	var sheetAcceptedOffer string = "T3"
+	var sheetAcceptedOffer = "T3"
 	sheetRange := fmt.Sprintf("Final Offer!%s", sheetAcceptedOffer)
 	fmt.Println("Sheet Range: ", sheetRange)
 	callStartTime := time.Now()
@@ -216,7 +216,6 @@ func ShouldBeSentToCost(sheetID string) (cost int, hasCost bool, err error) {
 		} else {
 			fmt.Println("Retrying Due to Google Err")
 		}
-		// implement a exponential backoff algorithm
 		for i := 0; i < maxRetries; i++ {
 			fmt.Println("Retry Attempt: ", i+1)
 			time.Sleep(time.Duration(retryTimeout) * time.Millisecond)
@@ -393,7 +392,7 @@ func handleNoCostSheet(sheetID string, result modules.WorkerResult, sheetName st
 	fmt.Println("Sheet Age: ", result.Age)
 	if result.Age >= 60 {
 		fmt.Println("Sheet is older than 60 days -> Checking Insightly to see if it is lost")
-		var oppId string = strings.Split(sheetName, "-")[2]
+		var oppId = strings.Split(sheetName, "-")[2]
 		if oppId == "" {
 			fmt.Println("No opportunity ID found")
 			fmt.Println("-=-=-=-=-=-=-=-=-=-=-=-")
@@ -582,7 +581,6 @@ func main() {
 			costSheetID = csID
 		}
 
-		// At this point we have verfied that we need to process as sheet and have a costSheetID
 		sheetUrl := fmt.Sprintf("https://docs.google.com/spreadsheets/d/%s/edit#gid=0", costSheetID)
 		fmt.Println("Calling the Drive Parser with Sheet URL -> : ", sheetUrl)
 		jsonData := models.DriveParserResponse{}

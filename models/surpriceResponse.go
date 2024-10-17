@@ -61,10 +61,10 @@ type Item struct {
 }
 
 type DriveParserData struct {
-	PoNumber         string     `json:"poNumber"`
-	PoResponseStatus string     `json:"poResponseStatus"`
-	Items            []struct{} `json:"items"`
-	BadItems         []Item     `json:"badItems"`
+	PoNumber         string `json:"poNumber"`
+	PoResponseStatus string `json:"poResponseStatus"`
+	Items            []any  `json:"items"`
+	BadItems         []Item `json:"badItems"`
 }
 
 func (d DriveParserData) String() string {
